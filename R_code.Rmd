@@ -136,8 +136,6 @@ final_matched_sample <- final_matched_sample %>% distinct()
 # Check the distribution of sample sizes (This is 2:1:1 ratio)
 ```{r}
 table(final_matched_sample$group)
-#         pain free   acute back pain     chronic back pain 
-#            11432              5716                  5716 
 ```
 
 # Final descriptive stats for age and sex
