@@ -1,0 +1,1110 @@
+---
+title: "UKB_Data Cleaning & Analysis"
+---
+## Import df
+```{r}
+df <- read.csv("cohort.csv")
+```
+
+## Check the dataset
+```{r}
+View(df)
+```
+
+## Load libraries
+```{r}
+library(dplyr)
+library(MatchIt)
+library(psych)
+library(ggplot2)
+library(tidyr)
+library(ppcor)
+library(emmeans)
+library(effectsize)
+library(car)
+library(ggpubr)
+library(mediation)
+library(qgraph)
+library(bootnet)
+library(NetworkComparisonTest)
+```
+
+## Rename vectors
+- id = id
+- sex = sex
+- age = age at recruiment
+- deprivation = Townsend deprivation index
+- pain_type = Pain type(s) experienced in last month
+- chronic = Back pain for 3+ months
+- ipaq = IPAQ activity group
+- met = Summed MET minutes per week for all activity
+- smoking = Smoking status
+- alcohol = Alcohol intake frequency
+- bmi = bmi
+- crp = C-reactive protein
+- depressed = Frequency of depressed mood in last 2 weeks
+- unenthusiasm = Frequency of unethusiasm/disinterest in last 2 weeks
+- tenseness = Frequency of tenseness/restlessness in last 2 weeks
+- tiredness = Frequency of tiredness/lethargy in last 2 weeks
+- stress = Illness, injury, bereavement, stress in last 2 years
+- at_above_recommendation = At or above moderate/vigorous walking recommendation
+- met_mod = MET minutes per week for moderate activity
+- met_vig = MET minutes per week for vigorous activity
+- met_walk = MET minutes per week for walking
+
+```{r}
+colnames(df) <- c("id", "sex", "age", "deprivation", "pain_type", "chronic", "ipaq", "met", "smoking", "alcohol", "bmi", "crp", "depressed", "unenthusiasm", "tenseness", "tiredness", "stress", "at_above_recommendation", "met_mod", "met_vig", "met_walk")
+```
+
+############################################################################
+### DATA MANAGEMENT & CLEANING ###
+############################################################################
+
+## Assign participants into groups
+```{r}
+df$group <- ""
+df$group[df$pain_type == "None of the above"] <- "pain free"
+df$group[df$pain_type == "Back pain" & df$chronic == "No"] <- "acute back pain" 
+df$group[df$pain_type == "Back pain" & df$chronic == "Yes"] <- "chronic back pain"
+```
+
+###Transform character vector 'group' into factor
+```{r}
+df$group <- factor(df$group, 
+                    levels = c("pain free", "acute back pain", "chronic back pain"))
+```
+
+## Remove rows that contain missing values 'NA' in the group column
+```{r}
+df1 <- df[!is.na(df$group), ]
+```
+
+##################################################################################
+### Match participants ###
+##################################################################################
+
+## Set desired sample sizes
+```{r}
+desired_pain_free <- 17148
+desired_chronic <- 5716
+desired_acute <- 5716
+```
+
+## Filter data for each group using base R as a workaround
+```{r}
+set.seed(123)
+pain_free <- df1[df1$group == "pain free", ]
+chronic <- df1[df1$group == "chronic back pain", ]
+acute <- df1[df1$group == "acute back pain", ]
+```
+
+## Sample from each group
+```{r}
+sample_pain_free <- pain_free[sample(nrow(pain_free), desired_pain_free), ]
+sample_chronic <- chronic[sample(nrow(chronic), desired_chronic), ]
+sample_acute <- acute[sample(nrow(acute), desired_acute), ]
+```
+
+## Combine the samples for pairwise matching with pain_free controls
+```{r}
+sample_pain_free_chronic <- bind_rows(sample_pain_free, sample_chronic)
+sample_pain_free_acute <- bind_rows(sample_pain_free, sample_acute)
+```
+
+## Pairwise matching for pain_free and chronic (every chronic is matched to 1 pain free)
+```{r}
+matched_pain_free_chronic <- matchit(group ~ age + sex, data = sample_pain_free_chronic, method = "nearest")
+matched_sample_pain_free_chronic <- match.data(matched_pain_free_chronic)
+```
+
+# Pairwise matching for pain_free and acute (every acute is matched to 1 pain free)
+```{r}
+matched_pain_free_acute <- matchit(group ~ age + sex, data = sample_pain_free_acute, method = "nearest")
+matched_sample_pain_free_acute <- match.data(matched_pain_free_acute)
+```
+
+# Combine the matched samples, ensuring duplicates are not included
+```{r}
+final_matched_sample <- rbind(matched_sample_pain_free_chronic, matched_sample_pain_free_acute)
+```
+
+# Remove duplicates if any
+```{r}
+final_matched_sample <- final_matched_sample %>% distinct()
+```
+
+# Check the distribution of sample sizes (This is 2:1:1 ratio)
+```{r}
+table(final_matched_sample$group)
+#         pain free   acute back pain     chronic back pain 
+#            11432              5716                  5716 
+```
+
+# Final descriptive stats for age and sex
+```{r}
+final_matched_sample %>%
+  group_by(group) %>%
+  summarize(
+    Mean = mean(age, na.rm = TRUE),
+    Median = median(age, na.rm = TRUE),
+    SD = sd(age, na.rm = TRUE),
+    Min = min(age, na.rm = TRUE),
+    Max = max(age, na.rm = TRUE),
+    Count = n()
+  )
+
+sex_stats <- final_matched_sample %>%
+  group_by(group, sex) %>%
+  summarize(
+    Count = n(),
+    Percent = (n() / sum(n())) * 100
+  )
+print(sex_stats)
+```
+
+#################################################################################
+### Generate final columns for analyses
+#################################################################################
+
+## Transform character vectors into factor
+```{r}
+final_matched_sample$group <- factor(final_matched_sample$group, 
+                    levels = c("pain free", "acute back pain", "chronic back pain"))
+
+final_matched_sample$group <- factor(final_matched_sample$group, 
+                                     levels = c("pain free", "acute back pain", "chronic back pain"),
+                                     labels = c("Pain free", "Acute back pain", "Chronic back pain"))
+
+final_matched_sample$sex <- factor(final_matched_sample$sex, 
+                    levels = c("Male", "Female"))
+
+final_matched_sample$ipaq <- factor(final_matched_sample$ipaq, 
+                    levels = c("high", "moderate", "low"))
+
+final_matched_sample$smoking <- factor(final_matched_sample$smoking, 
+                    levels = c("Never", "Previous", "Current"))
+
+final_matched_sample$alcohol <- factor(final_matched_sample$alcohol, 
+                    levels = c("Never", "Special occasions only", "One to three times a month", "Once or twice a week", "Three or four times a week", "Daily or almost daily"))
+
+final_matched_sample$at_above_recommendation <- factor(final_matched_sample$at_above_recommendation, 
+                    levels = c("Yes", "No"))
+```
+
+## Transform character vector 'depressed' into numeric vector 'depressed_num'
+# Full name: Frequency of depressed mood (Data-field: 2050)
+```{r}
+final_matched_sample <- final_matched_sample %>%
+  mutate(depressed_num = ifelse(depressed == "Not at all", 1,
+                         ifelse(depressed == "Several days", 2,
+                         ifelse(depressed == "More than half the days", 3,
+                         ifelse(depressed == "Nearly every day", 4,
+                         ifelse(depressed == "Do not know", NA,
+                         ifelse(depressed == "Prefer not to answer", NA, NA)))))))
+
+final_matched_sample <- final_matched_sample %>%
+  mutate(unenthusiasm_num = ifelse(unenthusiasm == "Not at all", 1,
+                         ifelse(unenthusiasm == "Several days", 2,
+                         ifelse(unenthusiasm == "More than half the days", 3,
+                         ifelse(unenthusiasm == "Nearly every day", 4,
+                         ifelse(unenthusiasm == "Do not know", NA,
+                         ifelse(unenthusiasm == "Prefer not to answer", NA, NA)))))))
+
+final_matched_sample <- final_matched_sample %>%
+  mutate(tenseness_num = ifelse(tenseness == "Not at all", 1,
+                         ifelse(tenseness == "Several days", 2,
+                         ifelse(tenseness == "More than half the days", 3,
+                         ifelse(tenseness == "Nearly every day", 4,
+                         ifelse(tenseness == "Do not know", NA,
+                         ifelse(tenseness == "Prefer not to answer", NA, NA)))))))
+
+final_matched_sample <- final_matched_sample %>%
+  mutate(tiredness_num = ifelse(tiredness == "Not at all", 1,
+                         ifelse(tiredness == "Several days", 2,
+                         ifelse(tiredness == "More than half the days", 3,
+                         ifelse(tiredness == "Nearly every day", 4,
+                         ifelse(tiredness == "Do not know", NA,
+                         ifelse(tiredness == "Prefer not to answer", NA, NA)))))))
+```
+
+## Generate depressive, anxiety score & wellbeing column
+```{r}
+final_matched_sample <- final_matched_sample %>%
+  mutate(depressed_score = depressed_num + unenthusiasm_num)
+
+final_matched_sample <- final_matched_sample %>%
+  mutate(anxiety_score = tenseness_num + tiredness_num)
+
+final_matched_sample <- final_matched_sample %>%
+  mutate(wellbeing = depressed_num + unenthusiasm_num + tenseness_num + tiredness_num)
+```
+
+### Sum character vector 'stress'
+```{r}
+stress <- c(
+     "None of the above" = 0,
+     "Serious illness, injury or assault of a close relative" = 1,
+     "Marital separation/divorce" = 1,
+     "Death of a close relative" = 1,
+     "Death of a spouse or partner" = 1,
+     "Financial difficulties" = 1,
+     "Serious illness, injury or assault to yourself" = 1,
+     "Prefer not to answer" = NA)
+
+sum_stress <- function(stress_string) {
+     if (stress_string == "" || stress_string == "Prefer not to answer") {
+         return(NA)}
+     events <- strsplit(stress_string, "\\|")[[1]]
+     events <- trimws(events)
+     event_values <- stress[events]
+     if (any(is.na(event_values))) {
+         return(NA)}
+     sum(event_values, na.rm = TRUE)}
+
+final_matched_sample <- final_matched_sample %>%
+     mutate(stress_sum = sapply(stress, sum_stress))
+```
+
+## Exclude outliers in MET
+```{r}
+final_matched_sample$met[final_matched_sample$met > 6720] <- NA
+```
+
+#####################################################################################
+###  DESCRIPTIVE STATISTICS  ######
+#####################################################################################
+
+## Check overall crp
+```{r}
+summary(final_matched_sample$crp)
+
+hist(final_matched_sample$crp, 
+     main = "Histogram of CRP Levels", 
+     xlab = "CRP Levels", 
+     ylab = "Frequency", 
+     col = "lightblue", 
+     border = "black")
+```
+
+## Check crp by group
+```{r}
+final_matched_sample %>%
+  filter(!is.na(crp)) %>%
+  group_by(group) %>%
+  summarise(
+    mean = mean(crp, na.rm = TRUE),
+    median = median(crp, na.rm = TRUE),
+    sd = sd(crp, na.rm = TRUE),
+    se = sd / sqrt(n()),
+    min = min(crp, na.rm = TRUE),
+    max = max(crp, na.rm = TRUE),
+    count = n()
+  )
+```
+
+## Check MET (=Total Metabolic Equivalent Task in minutes/week for all activity)
+```{r}
+summary(final_matched_sample$met)
+
+final_matched_sample %>%
+  filter(!is.na(met)) %>%
+  group_by(group) %>%
+  summarise(
+    mean = mean(met, na.rm = TRUE),
+    median = median(met, na.rm = TRUE),
+    sd = sd(met, na.rm = TRUE),
+    se = sd / sqrt(n()),
+    min = min(met, na.rm = TRUE),
+    max = max(met, na.rm = TRUE),
+    count = n()
+  )
+
+hist(final_matched_sample$met, 
+     main = "Histogram of MET", 
+     xlab = "MET", 
+     ylab = "Frequency", 
+     col = "lightblue", 
+     border = "black")
+
+ggplot(final_matched_sample %>%
+       filter(!is.na(met)), aes(x = met)) +
+     geom_histogram(binwidth = 1, fill = "steelblue", color = "black", alpha = 0.7) +
+     facet_wrap(~ group) +
+     labs(title = "Histogram of met by Group",
+          x = "met",
+          y = "Frequency") +
+     theme_minimal()
+```
+
+## Check wellbeing score
+wellbeing score has a score range from 4-16 (higher scores = poorer wellbeing)
+```{r}
+summary(final_matched_sample$wellbeing)
+
+hist(final_matched_sample$wellbeing, 
+     main = "Histogram of wellbeing", 
+     xlab = "wellbeing", 
+     ylab = "Frequency", 
+     col = "lightblue", 
+     border = "black")
+
+final_matched_sample %>%
+  filter(!is.na(wellbeing)) %>%
+  group_by(group) %>%
+  summarise(
+    mean = mean(wellbeing, na.rm = TRUE),
+    se = sd / sqrt(n()),
+    median = median(wellbeing, na.rm = TRUE),
+    sd = sd(wellbeing, na.rm = TRUE),
+    min = min(wellbeing, na.rm = TRUE),
+    max = max(wellbeing, na.rm = TRUE),
+    count = n())
+
+final_matched_sample %>%
+  group_by(group) %>%
+  skim(wellbeing)
+
+ggplot(final_matched_sample, aes(x = wellbeing)) +
+  geom_histogram(binwidth = 5, fill = "steelblue", color = "black", alpha = 0.7) +
+  facet_wrap(~ group) +
+  labs(title = "Histogram of Mental Wellbeing by Group",
+       x = "Mental Wellbeing",
+       y = "Frequency") +
+  theme_minimal()
+```
+
+## Check stress score
+The stress score has a range from 0 to 6 (higher scores means more stress events: "Serious illness, injury or assault of a close relative", "Marital separation/divorce", "Death of a close relative", "Death of a spouse or partner", "Financial difficulties", "Serious illness, injury or assault to yourself")
+```{r}
+summary(final_matched_sample$stress_sum)
+
+hist(final_matched_sample$stress_sum, 
+     main = "Histogram of stress", 
+     xlab = "Stress", 
+     ylab = "Frequency", 
+     col = "lightblue", 
+     border = "black")
+
+final_matched_sample %>%
+  filter(!is.na(stress_sum)) %>%
+  group_by(group) %>%
+  summarise(
+    mean = mean(stress_sum, na.rm = TRUE),
+    sd = sd(stress_sum, na.rm = TRUE),
+    se = sd / sqrt(n()),
+    median = median(stress_sum, na.rm = TRUE),
+    min = min(stress_sum, na.rm = TRUE),
+    max = max(stress_sum, na.rm = TRUE),
+    count = n())
+
+```
+
+######################################################################################
+## ANALYSIS ##
+######################################################################################
+
+##### ANOVA ##########
+
+## Calculate ANOVA
+- Dependent variables: crp, wellbeing, stress, met
+- Independent variable: group
+- Covariates: sex (factor), age, deprivation, smoking (factor), alcohol (factor), bmi
+```{r}
+### ANOVA for wellbeing by group
+aov_wellbeing <- aov(wellbeing ~ group, data = final_matched_sample)
+summary(aov_wellbeing)
+TukeyHSD(aov_wellbeing)
+
+residuals(aov_wellbeing) # check residuals on normality
+hist(residuals, 
+     main = "Histogram of Residuals", 
+     xlab = "Residuals", 
+     ylab = "Frequency", 
+     col = "lightblue", 
+     border = "black")
+
+### ANOVA for MET by group
+aov_met <- aov(met ~ group, data = final_matched_sample)
+summary(aov_met)
+TukeyHSD(aov_met)
+
+residuals <- residuals(aov_met) # check residuals on normality
+hist(residuals, 
+     main = "Histogram of Residuals", 
+     xlab = "Residuals", 
+     ylab = "Frequency", 
+     col = "lightblue", 
+     border = "black")
+
+# ANOVA for crp by group
+aov_crp <- aov(crp ~ group, data = final_matched_sample)
+
+residuals(aov_crp) # check residuals on normality
+hist(residuals, 
+     main = "Histogram of Residuals", 
+     xlab = "Residuals", 
+     ylab = "Frequency", 
+     col = "lightblue", 
+     border = "black") # residuals are right-skewed -> Log-transform crp data
+
+final_matched_sample$log_crp <- log(final_matched_sample$crp + 1)
+
+hist(final_matched_sample$log_crp, 
+     main = "Histogram of Log-Transformed CRP Levels", 
+     xlab = "Log-Transformed CRP Levels", 
+     ylab = "Frequency", 
+     col = "lightblue", 
+     border = "black")
+
+qqnorm(final_matched_sample$log_crp)
+
+aov_crp <- aov(log_crp ~ group, data = final_matched_sample)
+summary(aov_crp)
+TukeyHSD(aov_crp)
+
+# ANOVA for stress_sum by group
+aov_stress <- aov(stress_sum ~ group, data = final_matched_sample)
+summary(aov_stress)
+TukeyHSD(aov_stress)
+
+residuals(aov_stress) # check residuals on normality
+hist(residuals, 
+     main = "Histogram of Residuals", 
+     xlab = "Residuals", 
+     ylab = "Frequency", 
+     col = "lightblue", 
+     border = "black")
+```
+
+## ANCOVA
+```{r}
+final_matched_sample$group <- factor(final_matched_sample$group, 
+                                     levels = c("Pain free", "Acute back pain", "Chronic back pain"),
+                                     labels = c("Pain-free", "Acute BP", "Chronic BP"))
+
+# ANCOVA for wellbeing by group
+acov_wellbeing <- aov(wellbeing ~ group + deprivation + bmi + smoking + alcohol, data = final_matched_sample)
+summary(acov_wellbeing)
+
+library(ggplot2)
+library(ggbreak)
+
+ggplot(final_matched_sample, aes(x = factor(group), y = wellbeing, fill = factor(group))) +
+  geom_violin(trim = FALSE, color = "black") +
+  geom_boxplot(width = 0.1, color = "black", alpha = 0.5, outlier.shape = NA) +
+  labs(x = "Group", y = "Well-being (4-16 points)") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set2") +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(size = 20, face = "bold", color = "black"),  
+    axis.text.y = element_text(size = 20, face = "bold", color = "black"), 
+    axis.title.x = element_text(size = 20, face = "bold"),  
+    axis.title.y = element_text(size = 25, face = "bold")   
+  ) +
+  scale_y_break(c(8, 12), scales = 0.5)  
+
+# ANCOVA for MET by group
+acov_met <- aov(met ~ group + deprivation + bmi + smoking + alcohol, data = final_matched_sample)
+summary(acov_met)
+
+ggplot(final_matched_sample, aes(x = factor(group), y = met, fill = factor(group))) +
+  geom_violin(trim = FALSE, color = "black") +
+  geom_boxplot(width = 0.1, color = "black", alpha = 0.5, outlier.shape = NA) +
+  labs(x = "Group", y = "MET (minutes/week)") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set2") +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(size = 20, face = "bold", color = "black"),  
+    axis.text.y = element_text(size = 20, face = "bold", color = "black"),  
+    axis.title.x = element_text(size = 20, face = "bold"), 
+    axis.title.y = element_text(size = 25, face = "bold")  
+  )
+
+# ANCOVA for crp by group
+acov_crp <- aov(log_crp ~ group + deprivation + bmi + smoking + alcohol, data = final_matched_sample)
+summary(acov_crp)
+
+ggplot(final_matched_sample, aes(x = factor(group), y = crp, fill = factor(group))) +
+  geom_violin(trim = FALSE, color = "black") +
+  geom_boxplot(width = 0.1, color = "black", alpha = 0.5, outlier.shape = NA) +
+  labs(x = "Group", y = "CRP (mg/L)") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set2") +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(size = 20, face = "bold", color = "black"),  
+    axis.text.y = element_text(size = 20, face = "bold", color = "black"),  
+    axis.title.x = element_text(size = 20, face = "bold"),  
+    axis.title.y = element_text(size = 25, face = "bold")  
+  ) +
+  scale_y_break(c(3, 6), scales = 0.5)
+
+# ANCOVA for stress by group
+acov_stress <- aov(stress_sum ~ group + deprivation + bmi + smoking + alcohol, data = final_matched_sample)
+summary(acov_stress)
+
+ggplot(final_matched_sample, aes(x = factor(group), y = stress_sum, fill = factor(group))) +
+  geom_violin(trim = FALSE, color = "black") +
+  geom_boxplot(width = 0.1, color = "black", alpha = 0.5, outlier.shape = NA) +
+  labs(x = "Group", y = "Mental stress (0-6 points)") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set2") +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(size = 20, face = "bold", color = "black"),  
+    axis.text.y = element_text(size = 20, face = "bold", color = "black"),  
+    axis.title.x = element_text(size = 20, face = "bold"), 
+    axis.title.y = element_text(size = 25, face = "bold")  
+  ) +
+  scale_y_break(c(2, 4), scales = 1)
+```
+
+## Post-hoc Analyses (Tukey's Honestly Significant Difference (HSD))
+```{r}
+# Tukey's for wellbeing
+emms <- emmeans(acov_wellbeing, ~ group)
+print(emms)
+posthoc_results <- pairs(emms, adjust = "tukey")
+print(posthoc_results)
+posthoc_table_df <- as.data.frame(summary(posthoc_results))
+posthoc_table_df$lower.CL <- posthoc_table_df$estimate - 1.96 * posthoc_table_df$SE
+posthoc_table_df$upper.CL <- posthoc_table_df$estimate + 1.96 * posthoc_table_df$SE
+print(posthoc_table_df)
+
+# Cohens d
+mean_pain_free <- mean(final_matched_sample$wellbeing[final_matched_sample$group == "Pain free"], na.rm = TRUE)
+mean_acute_back_pain <- mean(final_matched_sample$wellbeing[final_matched_sample$group == "Acute back pain"], na.rm = TRUE)
+mean_chronic_back_pain <- mean(final_matched_sample$wellbeing[final_matched_sample$group == "Chronic back pain"], na.rm = TRUE)
+
+sd_pain_free <- sd(final_matched_sample$wellbeing[final_matched_sample$group == "Pain free"], na.rm = TRUE)
+sd_acute_back_pain <- sd(final_matched_sample$wellbeing[final_matched_sample$group == "Acute back pain"], na.rm = TRUE)
+sd_chronic_back_pain <- sd(final_matched_sample$wellbeing[final_matched_sample$group == "Chronic back pain"], na.rm = TRUE)
+
+n_pain_free <- sum(!is.na(final_matched_sample$wellbeing[final_matched_sample$group == "Pain free"]))
+n_acute_back_pain <- sum(!is.na(final_matched_sample$wellbeing[final_matched_sample$group == "Acute back pain"]))
+n_chronic_back_pain <- sum(!is.na(final_matched_sample$wellbeing[final_matched_sample$group == "Chronic back pain"]))
+
+calculate_cohens_d <- function(mean1, sd1, n1, mean2, sd2, n2) {
+  pooled_sd <- sqrt(((n1 - 1) * sd1^2 + (n2 - 1) * sd2^2) / (n1 + n2 - 2))
+  d <- (mean1 - mean2) / pooled_sd
+  return(d)
+}
+
+d_pain_free_vs_acute_back_pain <- calculate_cohens_d(mean_pain_free, sd_pain_free, n_pain_free, 
+                                                     mean_acute_back_pain, sd_acute_back_pain, n_acute_back_pain)
+
+d_pain_free_vs_chronic_back_pain <- calculate_cohens_d(mean_pain_free, sd_pain_free, n_pain_free, 
+                                                       mean_chronic_back_pain, sd_chronic_back_pain, n_chronic_back_pain)
+
+d_acute_back_pain_vs_chronic_back_pain <- calculate_cohens_d(mean_acute_back_pain, sd_acute_back_pain, n_acute_back_pain, 
+                                                             mean_chronic_back_pain, sd_chronic_back_pain, n_chronic_back_pain)
+
+cat("Cohen's d for Pain Free vs Acute Back Pain:", d_pain_free_vs_acute_back_pain, "\n")
+cat("Cohen's d for Pain Free vs Chronic Back Pain:", d_pain_free_vs_chronic_back_pain, "\n")
+cat("Cohen's d for Acute Back Pain vs Chronic Back Pain:", d_acute_back_pain_vs_chronic_back_pain, "\n")
+
+# Tukey's for MET
+emms <- emmeans(acov_met, ~ group)
+print(emms)
+posthoc_results <- pairs(emms, adjust = "tukey")
+print(posthoc_results)
+posthoc_table_df <- as.data.frame(summary(posthoc_results))
+posthoc_table_df$lower.CL <- posthoc_table_df$estimate - 1.96 * posthoc_table_df$SE
+posthoc_table_df$upper.CL <- posthoc_table_df$estimate + 1.96 * posthoc_table_df$SE
+print(posthoc_table_df)
+
+# Cohens d
+mean_pain_free <- mean(final_matched_sample$met[final_matched_sample$group == "Pain free"], na.rm = TRUE)
+mean_acute_back_pain <- mean(final_matched_sample$met[final_matched_sample$group == "Acute back pain"], na.rm = TRUE)
+mean_chronic_back_pain <- mean(final_matched_sample$met[final_matched_sample$group == "Chronic back pain"], na.rm = TRUE)
+
+sd_pain_free <- sd(final_matched_sample$met[final_matched_sample$group == "Pain free"], na.rm = TRUE)
+sd_acute_back_pain <- sd(final_matched_sample$met[final_matched_sample$group == "Acute back pain"], na.rm = TRUE)
+sd_chronic_back_pain <- sd(final_matched_sample$met[final_matched_sample$group == "Chronic back pain"], na.rm = TRUE)
+
+n_pain_free <- sum(!is.na(final_matched_sample$met[final_matched_sample$group == "Pain free"]))
+n_acute_back_pain <- sum(!is.na(final_matched_sample$met[final_matched_sample$group == "Acute back pain"]))
+n_chronic_back_pain <- sum(!is.na(final_matched_sample$met[final_matched_sample$group == "Chronic back pain"]))
+
+calculate_cohens_d <- function(mean1, sd1, n1, mean2, sd2, n2) {
+  pooled_sd <- sqrt(((n1 - 1) * sd1^2 + (n2 - 1) * sd2^2) / (n1 + n2 - 2))
+  d <- (mean1 - mean2) / pooled_sd
+  return(d)
+}
+
+d_pain_free_vs_acute_back_pain <- calculate_cohens_d(mean_pain_free, sd_pain_free, n_pain_free, 
+                                                     mean_acute_back_pain, sd_acute_back_pain, n_acute_back_pain)
+
+d_pain_free_vs_chronic_back_pain <- calculate_cohens_d(mean_pain_free, sd_pain_free, n_pain_free, 
+                                                       mean_chronic_back_pain, sd_chronic_back_pain, n_chronic_back_pain)
+
+d_acute_back_pain_vs_chronic_back_pain <- calculate_cohens_d(mean_acute_back_pain, sd_acute_back_pain, n_acute_back_pain, 
+                                                             mean_chronic_back_pain, sd_chronic_back_pain, n_chronic_back_pain)
+
+cat("Cohen's d for Pain Free vs Acute Back Pain:", d_pain_free_vs_acute_back_pain, "\n")
+cat("Cohen's d for Pain Free vs Chronic Back Pain:", d_pain_free_vs_chronic_back_pain, "\n")
+cat("Cohen's d for Acute Back Pain vs Chronic Back Pain:", d_acute_back_pain_vs_chronic_back_pain, "\n")
+
+# Tukey's for CRP_log
+emms <- emmeans(acov_crp, ~ group)
+print(emms)
+posthoc_results <- pairs(emms, adjust = "tukey")
+print(posthoc_results)
+posthoc_table_df <- as.data.frame(summary(posthoc_results))
+posthoc_table_df$lower.CL <- posthoc_table_df$estimate - 1.96 * posthoc_table_df$SE
+posthoc_table_df$upper.CL <- posthoc_table_df$estimate + 1.96 * posthoc_table_df$SE
+print(posthoc_table_df)
+
+# Cohens d
+mean_pain_free <- mean(final_matched_sample$log_crp[final_matched_sample$group == "Pain free"], na.rm = TRUE)
+mean_acute_back_pain <- mean(final_matched_sample$log_crp[final_matched_sample$group == "Acute back pain"], na.rm = TRUE)
+mean_chronic_back_pain <- mean(final_matched_sample$log_crp[final_matched_sample$group == "Chronic back pain"], na.rm = TRUE)
+
+sd_pain_free <- sd(final_matched_sample$log_crp[final_matched_sample$group == "Pain free"], na.rm = TRUE)
+sd_acute_back_pain <- sd(final_matched_sample$log_crp[final_matched_sample$group == "Acute back pain"], na.rm = TRUE)
+sd_chronic_back_pain <- sd(final_matched_sample$log_crp[final_matched_sample$group == "Chronic back pain"], na.rm = TRUE)
+
+n_pain_free <- sum(!is.na(final_matched_sample$log_crp[final_matched_sample$group == "Pain free"]))
+n_acute_back_pain <- sum(!is.na(final_matched_sample$log_crp[final_matched_sample$group == "Acute back pain"]))
+n_chronic_back_pain <- sum(!is.na(final_matched_sample$log_crp[final_matched_sample$group == "Chronic back pain"]))
+
+calculate_cohens_d <- function(mean1, sd1, n1, mean2, sd2, n2) {
+  pooled_sd <- sqrt(((n1 - 1) * sd1^2 + (n2 - 1) * sd2^2) / (n1 + n2 - 2))
+  d <- (mean1 - mean2) / pooled_sd
+  return(d)
+}
+
+d_pain_free_vs_acute_back_pain <- calculate_cohens_d(mean_pain_free, sd_pain_free, n_pain_free, 
+                                                     mean_acute_back_pain, sd_acute_back_pain, n_acute_back_pain)
+
+d_pain_free_vs_chronic_back_pain <- calculate_cohens_d(mean_pain_free, sd_pain_free, n_pain_free, 
+                                                       mean_chronic_back_pain, sd_chronic_back_pain, n_chronic_back_pain)
+
+d_acute_back_pain_vs_chronic_back_pain <- calculate_cohens_d(mean_acute_back_pain, sd_acute_back_pain, n_acute_back_pain, 
+                                                             mean_chronic_back_pain, sd_chronic_back_pain, n_chronic_back_pain)
+
+cat("Cohen's d for Pain Free vs Acute Back Pain:", d_pain_free_vs_acute_back_pain, "\n")
+cat("Cohen's d for Pain Free vs Chronic Back Pain:", d_pain_free_vs_chronic_back_pain, "\n")
+cat("Cohen's d for Acute Back Pain vs Chronic Back Pain:", d_acute_back_pain_vs_chronic_back_pain, "\n")
+
+# Tukey's for stress
+emms <- emmeans(acov_stress, ~ group)
+print(emms)
+posthoc_results <- pairs(emms, adjust = "tukey")
+print(posthoc_results)
+posthoc_table_df <- as.data.frame(summary(posthoc_results))
+posthoc_table_df$lower.CL <- posthoc_table_df$estimate - 1.96 * posthoc_table_df$SE
+posthoc_table_df$upper.CL <- posthoc_table_df$estimate + 1.96 * posthoc_table_df$SE
+print(posthoc_table_df)
+
+# Cohens d
+mean_pain_free <- mean(final_matched_sample$stress_sum[final_matched_sample$group == "Pain free"], na.rm = TRUE)
+mean_acute_back_pain <- mean(final_matched_sample$stress_sum[final_matched_sample$group == "Acute back pain"], na.rm = TRUE)
+mean_chronic_back_pain <- mean(final_matched_sample$stress_sum[final_matched_sample$group == "Chronic back pain"], na.rm = TRUE)
+
+sd_pain_free <- sd(final_matched_sample$stress_sum[final_matched_sample$group == "Pain free"], na.rm = TRUE)
+sd_acute_back_pain <- sd(final_matched_sample$stress_sum[final_matched_sample$group == "Acute back pain"], na.rm = TRUE)
+sd_chronic_back_pain <- sd(final_matched_sample$stress_sum[final_matched_sample$group == "Chronic back pain"], na.rm = TRUE)
+
+n_pain_free <- sum(!is.na(final_matched_sample$stress_sum[final_matched_sample$group == "Pain free"]))
+n_acute_back_pain <- sum(!is.na(final_matched_sample$stress_sum[final_matched_sample$group == "Acute back pain"]))
+n_chronic_back_pain <- sum(!is.na(final_matched_sample$stress_sum[final_matched_sample$group == "Chronic back pain"]))
+
+calculate_cohens_d <- function(mean1, sd1, n1, mean2, sd2, n2) {
+  pooled_sd <- sqrt(((n1 - 1) * sd1^2 + (n2 - 1) * sd2^2) / (n1 + n2 - 2))
+  d <- (mean1 - mean2) / pooled_sd
+  return(d)
+}
+
+d_pain_free_vs_acute_back_pain <- calculate_cohens_d(mean_pain_free, sd_pain_free, n_pain_free, 
+                                                     mean_acute_back_pain, sd_acute_back_pain, n_acute_back_pain)
+
+d_pain_free_vs_chronic_back_pain <- calculate_cohens_d(mean_pain_free, sd_pain_free, n_pain_free, 
+                                                       mean_chronic_back_pain, sd_chronic_back_pain, n_chronic_back_pain)
+
+d_acute_back_pain_vs_chronic_back_pain <- calculate_cohens_d(mean_acute_back_pain, sd_acute_back_pain, n_acute_back_pain, 
+                                                             mean_chronic_back_pain, sd_chronic_back_pain, n_chronic_back_pain)
+
+cat("Cohen's d for Pain Free vs Acute Back Pain:", d_pain_free_vs_acute_back_pain, "\n")
+cat("Cohen's d for Pain Free vs Chronic Back Pain:", d_pain_free_vs_chronic_back_pain, "\n")
+cat("Cohen's d for Acute Back Pain vs Chronic Back Pain:", d_acute_back_pain_vs_chronic_back_pain, "\n")
+```
+
+### Calculate correlation coefficients ##############
+
+#df preparations
+```{r}
+# Convert factor variables 'sex', 'smoking', 'alcohol' into numeric vector
+final_matched_sample$sex <- as.numeric(final_matched_sample$sex)
+
+final_matched_sample <- final_matched_sample %>%
+  mutate(smoking_num = as.numeric(as.factor(smoking)))
+
+final_matched_sample <- final_matched_sample %>%
+  mutate(alcohol_num = as.numeric(as.factor(alcohol)))
+
+# Check for missing values
+sapply(final_matched_sample[, c("log_crp", "wellbeing", "met", "stress_sum", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")], function(x) sum(is.na(x)))
+
+# Selecting only the rows from final_matched_sample where there are no missing values in the specified columns
+final_matched_sample_complete <- final_matched_sample[complete.cases(final_matched_sample[, c("log_crp", "wellbeing", "met", "stress_sum", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")]), ]
+```
+
+# Compute partial correlation, controlling for covariates
+```{r}
+# Between CRP and wellbeing
+pcor_crp_wellbeing <- pcor.test(final_matched_sample_complete$log_crp, final_matched_sample_complete$wellbeing, 
+                                 final_matched_sample_complete[, c("met", "stress_sum", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_crp_wellbeing)
+
+# Between CRP and stress 
+pcor_crp_stress <- pcor.test(final_matched_sample_complete$log_crp, final_matched_sample_complete$stress_sum, 
+                                 final_matched_sample_complete[, c("met", "wellbeing", "age","deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_crp_stress)
+
+# Between CRP and MET
+pcor_crp_met <- pcor.test(final_matched_sample_complete$log_crp, final_matched_sample_complete$met, 
+                                 final_matched_sample_complete[, c("stress_sum", "wellbeing", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_crp_met)
+
+# Between MET and wellbeing
+pcor_met_wellbeing <- pcor.test(final_matched_sample_complete$met, final_matched_sample_complete$wellbeing, 
+                                 final_matched_sample_complete[, c("stress_sum", "log_crp", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_met_wellbeing)
+
+# Between MET and stress
+pcor_met_stress <- pcor.test(final_matched_sample_complete$met, final_matched_sample_complete$stress_sum, 
+                                 final_matched_sample_complete[, c("wellbeing", "log_crp", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_met_stress)
+
+# Between wellbeing and stress
+pcor_wellbeing_stress <- pcor.test(final_matched_sample_complete$wellbeing, final_matched_sample_complete$stress_sum, 
+                                 final_matched_sample_complete[, c("met", "log_crp", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_wellbeing_stress)
+```
+
+## Adjust p-values after the Benjamini-Hochberg correction
+```{r}
+p_values <- c(0.5904038, 0.3307728, 0.0002514307, 8.775073e-15, 0.0003936685, 2.51205e-58)
+
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+print(adjusted_p_values)
+```
+
+## Partial correlation coefficients for all variables on each group sepertaley.
+## Pain free group
+
+# df preparations
+```{r}
+# Filter df for pain free group
+pain_free_df <- final_matched_sample %>% filter(group == "pain free")
+
+# Convert factor variables 'sex', 'smoking', 'alcohol' into numeric vector
+pain_free_df$sex <- as.numeric(pain_free_df$sex)
+
+pain_free_df <- pain_free_df %>%
+  mutate(smoking_num = as.numeric(as.factor(smoking)))
+
+pain_free_df <- pain_free_df %>%
+  mutate(alcohol_num = as.numeric(as.factor(alcohol)))
+
+# Check for missing values
+sapply(pain_free_df[, c("log_crp", "wellbeing", "met", "stress_sum", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")], function(x) sum(is.na(x)))
+
+# Selecting only the rows from pain_free_df where there are no missing values in the specified columns
+pain_free_df_complete <- pain_free_df[complete.cases(pain_free_df[, c("log_crp", "wellbeing", "met", "stress_sum", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")]), ]
+```
+
+# Compute partial correlation, controlling for covariates
+```{r}
+## Between CRP and wellbeing
+pcor_crp_wellbeing <- pcor.test(pain_free_df_complete$log_crp, pain_free_df_complete$wellbeing, 
+                                 pain_free_df_complete[, c("met", "stress_sum", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_crp_wellbeing)
+
+## Between CRP and stress 
+pcor_crp_stress <- pcor.test(pain_free_df_complete$log_crp, pain_free_df_complete$stress_sum, 
+                                 pain_free_df_complete[, c("met", "wellbeing", "age","deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_crp_stress)
+
+## Between CRP and MET
+pcor_crp_met <- pcor.test(pain_free_df_complete$log_crp, pain_free_df_complete$met, 
+                                 pain_free_df_complete[, c("stress_sum", "wellbeing", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_crp_met)
+
+## Between MET and wellbeing
+pcor_met_wellbeing <- pcor.test(pain_free_df_complete$met, pain_free_df_complete$wellbeing, 
+                                 pain_free_df_complete[, c("stress_sum", "log_crp", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_met_wellbeing)
+
+## Between MET and stress
+pcor_met_stress <- pcor.test(pain_free_df_complete$met, pain_free_df_complete$stress_sum, 
+                                 pain_free_df_complete[, c("wellbeing", "log_crp", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_met_stress)
+
+## Between wellbeing and stress
+pcor_wellbeing_stress <- pcor.test(pain_free_df_complete$wellbeing, pain_free_df_complete$stress_sum, 
+                                 pain_free_df_complete[, c("met", "log_crp", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_wellbeing_stress)
+```
+
+## Adjust p-values after the Benjamini-Hochberg correction
+```{r}
+p_values <- c(0.4689703, 0.678026, 0.05031685, 5.524207e-09, 0.004294802, 1.391284e-30)
+
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+print(adjusted_p_values)
+```
+
+## Acute back pain group
+
+# df preparations
+```{r}
+# Filter df for acute back pain group
+acute_df <- final_matched_sample %>% filter(group == "acute back pain")
+
+# Convert factor variables 'sex', 'smoking', 'alcohol' into numeric vector
+acute_df$sex <- as.numeric(acute_df$sex)
+
+acute_df <- acute_df %>%
+  mutate(smoking_num = as.numeric(as.factor(smoking)))
+
+acute_df <- acute_df %>%
+  mutate(alcohol_num = as.numeric(as.factor(alcohol)))
+
+# Check for missing values
+sapply(acute_df[, c("log_crp", "wellbeing", "met", "stress_sum", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")], function(x) sum(is.na(x)))
+
+# Selecting only the rows from acute_df where there are no missing values in the specified columns
+acute_df_complete <- acute_df[complete.cases(acute_df[, c("log_crp", "wellbeing", "met", "stress_sum", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")]), ]
+```
+
+# Compute partial correlation, controlling for other variables
+```{r}
+# Between CRP and mental wellbeing
+pcor_crp_wellbeing <- pcor.test(acute_df_complete$log_crp, acute_df_complete$wellbeing, 
+                                 acute_df_complete[, c("met", "stress_sum", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_crp_wellbeing)
+
+# Between CRP and stress 
+pcor_crp_stress <- pcor.test(acute_df_complete$log_crp, acute_df_complete$stress_sum, 
+                                 acute_df_complete[, c("met", "wellbeing", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_crp_stress)
+
+# Between CRP and MET
+pcor_crp_met <- pcor.test(acute_df_complete$log_crp, acute_df_complete$met, 
+                                 acute_df_complete[, c("stress_sum", "wellbeing", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_crp_met)
+
+# Between MET and wellbeing
+pcor_met_wellbeing <- pcor.test(acute_df_complete$met, acute_df_complete$wellbeing, 
+                                 acute_df_complete[, c("stress_sum", "log_crp", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_met_wellbeing)
+
+# Between MET and stress
+pcor_met_stress <- pcor.test(acute_df_complete$met, acute_df_complete$stress_sum, 
+                                 acute_df_complete[, c("wellbeing", "log_crp", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_met_stress)
+
+## Between wellbeing and stress
+pcor_wellbeing_stress <- pcor.test(acute_df_complete$wellbeing, acute_df_complete$stress_sum, 
+                                 acute_df_complete[, c("met", "log_crp", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_wellbeing_stress)
+```
+
+## Adjust p-values after the Benjamini-Hochberg correction
+```{r}
+p_values <- c(0.2369514, 0.8674117, 0.07745881, 5.009839e-05, 0.08820662, 5.774381e-21)
+
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+print(adjusted_p_values)
+```
+
+## Chronic back pain group
+
+# df preparations
+```{r}
+# Filter df for chronic back pain group
+chronic_df <- final_matched_sample %>% filter(group == "chronic back pain")
+
+# Convert factor variables 'sex', 'smoking', 'alcohol' into numeric vector
+chronic_df$sex <- as.numeric(chronic_df$sex)
+
+chronic_df <- chronic_df %>%
+  mutate(smoking_num = as.numeric(as.factor(smoking)))
+
+chronic_df <- chronic_df %>%
+  mutate(alcohol_num = as.numeric(as.factor(alcohol)))
+
+# Check for missing values
+sapply(chronic_df[, c("log_crp", "wellbeing", "met", "stress_sum", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")], function(x) sum(is.na(x)))
+
+# Selecting only the rows from chronic_df where there are no missing values in the specified columns
+chronic_df_complete <- chronic_df[complete.cases(chronic_df[, c("log_crp", "wellbeing", "met", "stress_sum", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")]), ]
+```
+
+# Compute partial correlation, controlling for other variables
+```{r}
+# Between CRP and mental wellbeing
+pcor_crp_wellbeing <- pcor.test(chronic_df_complete$log_crp, chronic_df_complete$wellbeing, 
+                                 chronic_df_complete[, c("met", "stress_sum", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_crp_wellbeing)
+
+# Between CRP and stress 
+pcor_crp_stress <- pcor.test(chronic_df_complete$log_crp, chronic_df_complete$stress_sum, 
+                                 chronic_df_complete[, c("met", "wellbeing", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_crp_stress)
+
+# Between CRP and MET
+pcor_crp_met <- pcor.test(chronic_df_complete$log_crp, chronic_df_complete$met, 
+                                 chronic_df_complete[, c("stress_sum", "wellbeing", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_crp_met)
+
+# Between MET and mental wellbeing
+pcor_met_wellbeing <- pcor.test(chronic_df_complete$met, chronic_df_complete$wellbeing, 
+                                 chronic_df_complete[, c("stress_sum", "log_crp", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_met_wellbeing)
+
+# Between MET and stress
+pcor_met_stress <- pcor.test(chronic_df_complete$met, chronic_df_complete$stress_sum, 
+                                 chronic_df_complete[, c("wellbeing", "log_crp", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_met_stress)
+
+## Between wellbeing and stress
+pcor_wellbeing_stress <- pcor.test(chronic_df_complete$wellbeing, chronic_df_complete$stress_sum, 
+                                 chronic_df_complete[, c("met", "log_crp", "age", "deprivation", "smoking_num", "alcohol_num", "bmi")])
+
+print(pcor_wellbeing_stress)
+```
+
+## Adjust p-values after the Benjamini-Hochberg correction
+```{r}
+p_values <- c(0.6145116, 0.09761472, 0.005137159, 0.0002067646, 0.2186852, 3.862597e-11)
+
+adjusted_p_values <- p.adjust(p_values, method = "BH")
+print(adjusted_p_values)
+```
+
+## Network analysis for each seperate group for all numeric variables
+```{r}
+final_matched_sample$deprivation_shifted <- final_matched_sample$deprivation + 6.26
+
+# Subset data by group
+pain_free_data <- final_matched_sample %>% filter(group == "Pain free")
+acute_back_pain_data <- final_matched_sample %>% filter(group == "Acute back pain")
+chronic_back_pain_data <- final_matched_sample %>% filter(group == "Chronic back pain")
+
+# Select variables from each dataset
+pain_free_data <- pain_free_data %>%
+    dplyr::select(age, stress_sum, log_crp, deprivation_shifted, bmi, met_mod, met_vig, met_walk, depressed_num, unenthusiasm_num, tenseness_num, tiredness_num) %>%
+    na.omit()
+
+acute_back_pain_data <- acute_back_pain_data %>%
+    dplyr::select(age, stress_sum, log_crp, deprivation_shifted, bmi, met_mod, met_vig, met_walk, depressed_num, unenthusiasm_num, tenseness_num, tiredness_num) %>%
+    na.omit()
+
+chronic_back_pain_data <- chronic_back_pain_data %>%
+    dplyr::select(age, stress_sum, log_crp, deprivation_shifted, bmi, met_mod, met_vig, met_walk, depressed_num, unenthusiasm_num, tenseness_num, tiredness_num) %>%
+    na.omit()
+
+# Estimate network for each group
+network_pain_free <- estimateNetwork(pain_free_data, default = "EBICglasso")
+
+network_acute_back_pain <- estimateNetwork(acute_back_pain_data, default = "EBICglasso")
+
+network_chronic_back_pain <- estimateNetwork(chronic_back_pain_data, default = "EBICglasso")
+
+# Visualise the networks
+variable_names <- c("Age", "Stress", "CRP", "Deprivation", "BMI", "MET_mod", "MET_vig", "MET_walk", "Depressed", "Unenthusiasm", "Tenseness", "Tiredness")
+
+network_pain_free_matrix <- network_pain_free$graph
+qgraph(
+  network_pain_free_matrix,  
+  labels = variable_names,   
+  label.cex = 1.2,           
+  posCol = "darkred",         
+  negCol = "darkgreen",       
+  layout = "circle",
+  edge.width = 2.5,          
+  vsize = 10,               
+  esize = 10            
+)
+
+network_acute_back_pain_matrix <- network_acute_back_pain$graph
+qgraph(
+  network_acute_back_pain_matrix,
+  labels = variable_names,  
+  label.cex = 1.2,           
+  posCol = "darkred",        
+  negCol = "darkgreen",      
+  layout = "circle",        
+  edge.width = 2.5,         
+  vsize = 10,                
+  esize = 10                 
+)
+
+network_chronic_back_pain_matrix <- network_chronic_back_pain$graph
+qgraph(
+  network_chronic_back_pain_matrix,
+  labels = variable_names,   
+  label.cex = 1.2,           
+  posCol = "darkred",         
+  negCol = "darkgreen",      
+  layout = "circle",         
+  edge.width = 2.5,         
+  vsize = 10,                
+  esize = 10                
+)
+```
+
+## Compare the 3 networks
+```{r}
+# Comparison between Pain-Free and Acute Back Pain Networks
+NCT(network_pain_free, network_acute_back_pain, 
+                              it = 500,
+                              binary.data = FALSE,
+                              paired = FALSE,
+                              test.edges = TRUE, 
+                              edges = "all")
+
+# Comparison between Pain-Free and Chronic Back Pain Networks
+NCT(pain_free_data, chronic_back_pain_data,
+                              it = 500,
+                              binary.data = FALSE,
+                              paired = FALSE,
+                              test.edges = TRUE, 
+                              edges = "all")
+
+# Comparison between Acute Back Pain and Chronic Back Pain Networks
+NCT(network_acute_back_pain, network_chronic_back_pain, 
+                            it = 500,
+                            binary.data = FALSE,
+                            paired = FALSE, 
+                            test.edges = TRUE, 
+                            edges = "all")
+```
